@@ -17,7 +17,13 @@ extension CSVWriter {
         ///
         /// If empty, no row will be written.
         public var headers: [String]
+        
+        /// if excel friendly, foceEscapeFields are respected and headers will never be escaped
+        public var isExcelFriendly: Bool
 
+        /// Field index of fields that we force for escape
+        public var forceEscapeFields: [Int]
+        
         /// Designated initlaizer setting the default values.
         public init() {
             self.encoding = nil
@@ -25,6 +31,8 @@ extension CSVWriter {
             self.delimiters = (field: ",", row: "\n")
             self.escapingStrategy = .doubleQuote
             self.headers = .init()
+            self.forceEscapeFields = [Int]()
+            self.isExcelFriendly = false
         }
     }
 }
