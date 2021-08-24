@@ -14,6 +14,7 @@ public final class CSVWriter {
     private let _isFieldDelimiter: DelimiterChecker
     /// Check whether the following scalar are par of the row delimiter sequence.
     private let _isRowDelimiter: DelimiterChecker
+    private let _isPlusDelimiter: DelimiterChecker
     /// The row being writen.
     ///
     /// The header row is not accounted on the `row` index.
@@ -38,10 +39,11 @@ public final class CSVWriter {
         (self._stream, self._encoder) = (stream, encoder)
         self._isFieldDelimiter = CSVWriter.makeMatcher(delimiter: self.settings.delimiters.field)
         self._isRowDelimiter = CSVWriter.makeMatcher(delimiter: self.settings.delimiters.row)
+        self._isPlusDelimiter = CSVWriter.makeMatcher(delimiter: [Unicode.Scalar("\n")])
         (self.rowIndex, self.fieldIndex, self.expectedFields) = (0, 0, 0)
         
         if !self.settings.headers.isEmpty {
-            try self.write(row: self.settings.headers)
+            try self.write(row: self.settings.headers, isHeader: true)
             self.rowIndex = 0
         }
     }
@@ -102,7 +104,7 @@ extension CSVWriter {
     /// This function can be called to add several fields at the same time. The row is not completed at the end of this function; therefore subsequent calls to this function or `write(field:)` can be made. An explicit call to `endRow()` must be made to write the row delimiter.
     /// - parameter fields: A collection representing several fields (usually `[String]`).
     /// - throws: `CSVError<CSVWriter>` exclusively.
-    public func write<C:Collection>(fields: C) throws where C.Element == String {
+    public func write<C:Collection>(fields: C, isHeader: Bool? = nil) throws where C.Element == String {
         guard self.expectedFields <= 0 || (self.fieldIndex + fields.count) <= self.expectedFields else {
             throw Error._fieldOverflow(expectedFields: self.expectedFields)
         }
@@ -111,7 +113,7 @@ extension CSVWriter {
             if self.fieldIndex > 0 {
                 try self._lowlevelWrite(delimiter: self.settings.delimiters.field)
             }
-            try self._lowlevelWrite(field: field)
+            try self._lowlevelWrite(field: field, fieldIndexToWrite: self.fieldIndex, isHeader: isHeader)
             self.fieldIndex += 1
         }
     }
@@ -149,8 +151,8 @@ extension CSVWriter {
     /// Do not call `endRow()` after this function. It is called internally.
     /// - parameter row: Sequence of strings representing a CSV row.
     /// - throws: `CSError<CSVWriter>` exclusively.
-    @inlinable public func write<C:Collection>(row: C) throws where C.Element==String {
-        try self.write(fields: row)
+    @inlinable public func write<C:Collection>(row: C, isHeader: Bool? = nil) throws where C.Element==String {
+        try self.write(fields: row, isHeader: isHeader)
         try self.endRow()
     }
 
@@ -189,9 +191,19 @@ extension CSVWriter {
     /// Writes the given `String` into the receiving writer's stream.
     /// - parameter field: The field to be checked for characters to escape and subsequently written.
     /// - throws: `CSVError<CSVWriter>` exclusively.
-    private func _lowlevelWrite(field: String) throws {
+    private func _lowlevelWrite(field: String, fieldIndexToWrite: Int? = nil, isHeader: Bool? = nil) throws {
         // 1. If the field is empty, don't write anything.
         guard !field.isEmpty else { return }
+        
+        var forceEscape = false
+        
+        if configuration.isExcelFriendly {
+            if let fitw = fieldIndexToWrite {
+                if let isH = isHeader, isH == true {
+                    forceEscape = false
+                } else if self.configuration.forceEscapeFields.contains(fitw) { forceEscape = true }
+            }
+        }
         
         let input:  [Unicode.Scalar] = .init(field.unicodeScalars)
         // 2. Reserve space for all field scalars plus a bit more in case escaping is needed.
@@ -209,9 +221,13 @@ extension CSVWriter {
                     needsEscaping = true
                     result.append(escapingScalar)
                 // 6. If there is a field or row delimiter, the field needs escaping.
-                } else if self._isFieldDelimiter(input, &index, &result) || self._isRowDelimiter(input, &index, &result) {
+                } else if self._isFieldDelimiter(input, &index, &result) || self._isRowDelimiter(input, &index, &result) || self._isPlusDelimiter(input, &index, &result) {
+                    // todo: || scalar == Unicode.Scalar("+") || scalar == Unicode.Scalar("-") || scalar == Unicode.Scalar("=")
                     needsEscaping = true
                     continue
+//                } else if index == 0 && self._isPlusDelimiter(input, &index, &result) {
+//                    needsEscaping = true
+//                    continue
                 }
                 
                 result.append(scalar)
@@ -219,7 +235,7 @@ extension CSVWriter {
             }
             
             // 7. If the field needed escaping, insert the escaping escalar at the beginning and end of the field.
-            if needsEscaping {
+            if needsEscaping || forceEscape {
                 result.insert(escapingScalar, at: result.startIndex)
                 result.append(escapingScalar)
             }
